@@ -1,0 +1,224 @@
+---
+- name: Build ROOT and Geant4 from source
+  hosts: physics_build
+  become: true
+
+  vars:
+    root_version: "6.40.04"
+    geant4_version: "11.4.2"
+    build_jobs: 4
+
+    source_base: /opt/src
+    build_base: /opt/build
+    archive_base: /var/tmp
+
+    root_archive: "{{ archive_base }}/root_v{{ root_version }}.source.tar.gz"
+    root_source: "{{ source_base }}/root-{{ root_version }}-source"
+    root_build: "{{ build_base }}/root-{{ root_version }}"
+    root_install: "/opt/root/{{ root_version }}"
+
+    geant4_archive: "{{ archive_base }}/geant4-v{{ geant4_version }}.tar.gz"
+    geant4_source: "{{ source_base }}/geant4-{{ geant4_version }}-source"
+    geant4_build: "{{ build_base }}/geant4-{{ geant4_version }}"
+    geant4_install: "/opt/geant4/{{ geant4_version }}"
+
+  tasks:
+    - name: Install compilation dependencies
+      ansible.builtin.apt:
+        name:
+          - build-essential
+          - binutils
+          - ca-certificates
+          - cmake
+          - dpkg-dev
+          - g++
+          - gcc
+          - git
+          - ninja-build
+          - pkg-config
+          - python3
+          - python3-dev
+          - python3-numpy
+          - tar
+          - libssl-dev
+          - libtbb-dev
+          - libgif-dev
+          - libx11-dev
+          - libxext-dev
+          - libxft-dev
+          - libxpm-dev
+          - libexpat1-dev
+          - libcurl4-openssl-dev
+          - libxml2-dev
+          - libfreetype6-dev
+          - libpng-dev
+          - libjpeg-dev
+          - zlib1g-dev
+          - liblzma-dev
+          - libxxhash-dev
+          - liblz4-dev
+          - libzstd-dev
+          - nlohmann-json3-dev
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create source, build and installation directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ source_base }}"
+        - "{{ build_base }}"
+        - "{{ root_source }}"
+        - "{{ geant4_source }}"
+        - /opt/root
+        - /opt/geant4
+
+    # ROOT
+
+    - name: Download ROOT source archive
+      ansible.builtin.get_url:
+        url: "https://root.cern/download/root_v{{ root_version }}.source.tar.gz"
+        dest: "{{ root_archive }}"
+        tmp_dest: /var/tmp
+        mode: "0644"
+        timeout: 300
+
+    - name: Extract ROOT source
+      ansible.builtin.unarchive:
+        src: "{{ root_archive }}"
+        dest: "{{ root_source }}"
+        remote_src: true
+        extra_opts:
+          - --strip-components=1
+        creates: "{{ root_source }}/CMakeLists.txt"
+
+    - name: Configure ROOT
+      ansible.builtin.command:
+        argv:
+          - cmake
+          - -S
+          - "{{ root_source }}"
+          - -B
+          - "{{ root_build }}"
+          - -G
+          - Ninja
+          - -DCMAKE_BUILD_TYPE=Release
+          - "-DCMAKE_INSTALL_PREFIX={{ root_install }}"
+          - -DCMAKE_CXX_STANDARD=17
+          - -Dpyroot=ON
+          - -Drpath=ON
+          - -Dx11=OFF
+          - -Dopengl=OFF
+          - -Dwebgui=OFF
+      args:
+        creates: "{{ root_build }}/build.ninja"
+
+    - name: Build and install ROOT
+      ansible.builtin.command:
+        argv:
+          - cmake
+          - --build
+          - "{{ root_build }}"
+          - --target
+          - install
+          - --parallel
+          - "{{ build_jobs | string }}"
+      args:
+        creates: "{{ root_install }}/bin/root-config"
+
+    # Geant4
+
+    - name: Download Geant4 source archive
+      ansible.builtin.get_url:
+        url: "https://geant4-data.web.cern.ch/releases/geant4-v{{ geant4_version }}.tar.gz"
+        dest: "{{ geant4_archive }}"
+        tmp_dest: /var/tmp
+        mode: "0644"
+        timeout: 120
+
+    - name: Extract Geant4 source
+      ansible.builtin.unarchive:
+        src: "{{ geant4_archive }}"
+        dest: "{{ geant4_source }}"
+        remote_src: true
+        extra_opts:
+          - --strip-components=1
+        creates: "{{ geant4_source }}/CMakeLists.txt"
+
+    - name: Configure Geant4
+      ansible.builtin.command:
+        argv:
+          - cmake
+          - -S
+          - "{{ geant4_source }}"
+          - -B
+          - "{{ geant4_build }}"
+          - -G
+          - Ninja
+          - -DCMAKE_BUILD_TYPE=Release
+          - "-DCMAKE_INSTALL_PREFIX={{ geant4_install }}"
+          - -DCMAKE_CXX_STANDARD=17
+          - -DGEANT4_BUILD_MULTITHREADED=ON
+          - -DGEANT4_USE_SYSTEM_EXPAT=ON
+          - -DGEANT4_INSTALL_DATA=ON
+          - -DGEANT4_INSTALL_EXAMPLES=ON
+          - -DGEANT4_INSTALL_DATA_TIMEOUT=3000
+      args:
+        creates: "{{ geant4_build }}/build.ninja"
+
+    - name: Build and install Geant4
+      ansible.builtin.command:
+        argv:
+          - cmake
+          - --build
+          - "{{ geant4_build }}"
+          - --target
+          - install
+          - --parallel
+          - "{{ build_jobs | string }}"
+      args:
+        creates: "{{ geant4_install }}/bin/geant4-config"
+
+    # Environment configuration
+
+    - name: Configure ROOT and Geant4 environment
+      ansible.builtin.copy:
+        dest: /etc/profile.d/root-geant4.sh
+        mode: "0644"
+        content: |
+          # ROOT {{ root_version }}
+          if [ -r "{{ root_install }}/bin/thisroot.sh" ]; then
+              . "{{ root_install }}/bin/thisroot.sh"
+          fi
+
+          # Geant4 {{ geant4_version }}
+          if [ -r "{{ geant4_install }}/bin/geant4.sh" ]; then
+              . "{{ geant4_install }}/bin/geant4.sh"
+          fi
+
+    # Verification
+
+    - name: Check installed ROOT version
+      ansible.builtin.command:
+        argv:
+          - "{{ root_install }}/bin/root-config"
+          - --version
+      register: root_check
+      changed_when: false
+
+    - name: Check installed Geant4 version
+      ansible.builtin.command:
+        argv:
+          - "{{ geant4_install }}/bin/geant4-config"
+          - --version
+      register: geant4_check
+      changed_when: false
+
+    - name: Display installed versions
+      ansible.builtin.debug:
+        msg:
+          - "ROOT version: {{ root_check.stdout }}"
+          - "Geant4 version: {{ geant4_check.stdout }}"

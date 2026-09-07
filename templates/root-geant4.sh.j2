@@ -1,0 +1,9 @@
+# Managed by Ansible: make modules available without loading the software.
+if ! type module >/dev/null 2>&1; then
+    if [ -r {{ lmod_init_script | quote }} ]; then
+        . {{ lmod_init_script | quote }}
+    fi
+fi
+if [ -n "${LMOD_CMD:-}" ] && type module >/dev/null 2>&1; then
+    module use {{ modulefiles_base | quote }}
+fi

@@ -1,0 +1,10 @@
+-- Managed by Ansible. Requires Lmod >= 8.6.
+help({{ (item.title ~ " " ~ item.version ~ ": load the installed software environment.") | to_json }})
+whatis({{ ("Name: " ~ item.title) | to_json }})
+whatis({{ ("Version: " ~ item.version) | to_json }})
+conflict({{ item.name | to_json }})
+
+-- Let the installed setup script supply version-specific paths and data variables.
+-- Lmod records the environment changes and reverses them on module unload.
+source_sh("bash", {{ ((item.prefix ~ "/bin/" ~ item.script) | quote) | to_json }})
+prepend_path("CMAKE_PREFIX_PATH", {{ item.prefix | to_json }})

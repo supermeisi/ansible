@@ -8,6 +8,11 @@
     geant4_version: "11.4.2"
     build_jobs: 4
 
+    # Lua modulefiles require Lmod >= 8.6 (source_sh support).
+    modulefiles_base: /opt/modulefiles
+    install_lmod: true
+    lmod_init_script: /usr/share/lmod/lmod/init/sh
+
     source_base: /opt/src
     build_base: /opt/build
     archive_base: /var/tmp
@@ -182,22 +187,70 @@
       args:
         creates: "{{ geant4_install }}/bin/geant4-config"
 
-    # Environment configuration
+    # Environment modules. Run with --tags modulefiles for existing installs.
 
-    - name: Configure ROOT and Geant4 environment
-      ansible.builtin.copy:
-        dest: /etc/profile.d/root-geant4.sh
-        mode: "0644"
-        content: |
-          # ROOT {{ root_version }}
-          if [ -r "{{ root_install }}/bin/thisroot.sh" ]; then
-              . "{{ root_install }}/bin/thisroot.sh"
-          fi
+    - name: Configure Lua environment modules
+      tags: [modulefiles]
+      block:
+        - name: Install Lmod
+          ansible.builtin.apt:
+            name: lmod
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
+          when: install_lmod | bool
 
-          # Geant4 {{ geant4_version }}
-          if [ -r "{{ geant4_install }}/bin/geant4.sh" ]; then
-              . "{{ geant4_install }}/bin/geant4.sh"
-          fi
+        - name: Check installed environment scripts
+          ansible.builtin.stat:
+            path: "{{ item }}"
+          loop:
+            - "{{ root_install }}/bin/thisroot.sh"
+            - "{{ geant4_install }}/bin/geant4.sh"
+          register: module_environment_scripts
+
+        - name: Require installed software before creating modules
+          ansible.builtin.assert:
+            that:
+              - item.stat.exists
+              - item.stat.isreg | default(false)
+            fail_msg: "Missing {{ item.item }}. Run the full installation first."
+          loop: "{{ module_environment_scripts.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+
+        - name: Create modulefile directories
+          ansible.builtin.file:
+            path: "{{ modulefiles_base }}/{{ item }}"
+            state: directory
+            mode: "0755"
+          loop:
+            - root
+            - geant4
+
+        - name: Create versioned Lua modulefiles
+          ansible.builtin.template:
+            src: software.lua.j2
+            dest: "{{ modulefiles_base }}/{{ item.name }}/{{ item.version }}.lua"
+            mode: "0644"
+          loop:
+            - name: root
+              title: ROOT
+              version: "{{ root_version }}"
+              prefix: "{{ root_install }}"
+              script: thisroot.sh
+            - name: geant4
+              title: Geant4
+              version: "{{ geant4_version }}"
+              prefix: "{{ geant4_install }}"
+              script: geant4.sh
+          loop_control:
+            label: "{{ item.name }}/{{ item.version }}"
+
+        - name: Replace automatic software sourcing with module discovery
+          ansible.builtin.template:
+            src: root-geant4.sh.j2
+            dest: /etc/profile.d/root-geant4.sh
+            mode: "0644"
 
     # Verification
 
@@ -222,3 +275,5 @@
         msg:
           - "ROOT version: {{ root_check.stdout }}"
           - "Geant4 version: {{ geant4_check.stdout }}"
+          - "Modulefiles: {{ modulefiles_base }} (Lmod >= 8.6 required)"
+          - "In a new login shell: module load root/{{ root_version }} geant4/{{ geant4_version }}"
